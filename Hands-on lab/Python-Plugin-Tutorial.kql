@@ -1,0 +1,279 @@
+//
+//  Demo of KQL + inline Python
+//
+
+#connect cluster('demo11.westus.kusto.windows.net').database('ML') 
+
+//  Writing & pasting this simple Python script in KE as is doesn't work, it generates parsing errors by KQL
+
+exp = kargs["exp"]
+result = df
+result["y"] = df["x"].pow(exp)
+
+//  Mark the above lines and press either F2, Ok or Ctrl+K, Ctrl+S to decorate it. Verifying it’s a legal KQL multi-line string
+
+print
+```
+exp = kargs["exp"]
+result = df
+result["y"] = df["x"].pow(exp)
+```
+
+//
+// Run it
+//
+
+range x from 1 to 10 step 1
+
+let code =
+```
+exp = kargs["exp"]
+result = df
+result["y"] = df["x"].pow(exp)
+```;
+range x from 1 to 10 step 1
+| evaluate python(typeof(*, y:int), code, pack('exp', 4))
+
+//
+//  Demo of fitting time series with high order polynomial using numpy.polyfit
+//
+
+//  Original time series (Web service telemetry views)
+//
+let max_t = datetime(2016-09-03);
+demo_make_series1
+| make-series num=count() on TimeStamp from max_t-1d to max_t step 5m by OsVer
+| render timechart 
+
+// Linear fit (1st degree polynom) using native series_fit_line() 
+//
+let max_t = datetime(2016-09-03);
+demo_make_series1
+| make-series num=count() on TimeStamp from max_t-1d to max_t step 5m by OsVer
+| extend series_fit_line(num)
+| render timechart 
+
+//
+//  Better fit with high order polynomial using numpy.polyfit
+//
+//  Note we Wrap the Python script in Kusto function/lambda for passing parameters and readability
+//
+
+let series_fit_poly_fl=(tbl:(*), in_series:string, out_series:string, degree:int)
+{
+    let kwargs = pack('in_series', in_series, 'out_series', out_series, 'degree', degree);
+    let code=
+    ```if 1:
+        
+        in_series = kargs["in_series"]
+        out_series = kargs["out_series"]
+        degree = kargs["degree"]
+        
+        def fit(s, deg):
+            x = np.arange(len(s))
+            coeff = np.polyfit(x, s, deg)
+            p = np.poly1d(coeff)
+            z = p(x)
+            return z
+        
+        result = df
+        result[out_series] = df[in_series].apply(fit, args=(degree,))
+    ```;
+    tbl
+     | evaluate python(typeof(*), code, kwargs)   //  new plugin syntax  
+};
+//
+let max_t = datetime(2016-09-03);
+demo_make_series1
+| make-series num=count() on TimeStamp from max_t-1d to max_t step 5m by OsVer
+| extend series_fit_line(num)
+| extend fit_num=dynamic(null)
+| invoke series_fit_poly_fl('num', 'fit_num', 5)
+| render timechart 
+
+//
+//  this can be done using the new native function series_fit_poly...
+//
+
+let max_t = datetime(2016-09-03);
+demo_make_series1
+| make-series num=count() on TimeStamp from max_t-1d to max_t step 5m by OsVer
+| extend series_fit_line(num)
+| extend series_fit_poly(num, 5)
+| render timechart 
+
+//
+//  Demo of interpolation missing values in time series of car torque metric using LOWESS (local regression from statsmodels.api.nonparametric.lowess)
+//
+
+let series_fit_lowess_fl=(tbl:(*), in_series:string, out_series:string, fit_size:double, time_col:string)
+{
+    let kwargs = pack('in_series', in_series, 'out_series', out_series, 'fit_size', fit_size, 'time_col', time_col);
+    let code=
+    ```if 1:
+        
+        in_series = kargs["in_series"]
+        out_series = kargs["out_series"]
+        fit_size = kargs["fit_size"]
+        time_col = kargs["time_col"]
+        
+        import statsmodels.api as sm
+        def lowess_fit(ts_row, times_col, vals_col, fsize):
+            y = ts_row[vals_col]
+            fraction = fsize/len(y)
+            # if times columns exists convert to numeric seconds for x-axis, else creates sequential numbers
+            x = np.arange(len(y)) if times_col == "" else pd.to_numeric(pd.to_datetime(ts_row[times_col]))/(1e9*60) #convert ticks to minutes
+            x = x - x.min()
+            lowess = sm.nonparametric.lowess
+            z = lowess(y, x, return_sorted=False, frac=fraction)
+            return list(z)
+        
+        result = df
+        result[out_series] = df.apply(lowess_fit, axis=1, args=(time_col, in_series, fit_size))
+    ```;
+    tbl
+     | evaluate python(typeof(*), code, kwargs)
+};
+//
+let endtime=datetime(2019-05-01 00:00);                     //  end time
+let offset=0m;                                              //  nice charts with offset=0m, 7m
+let lookback=3m;                                            //  interval to analyze
+let dt=1s;
+let etime=endtime-offset;
+let stime=etime-lookback;                                   //  start time
+let missing_val=123456;                                     //  to be removed after next deployment
+demo_torque
+| where Timestamp between (stime..etime)
+| make-series Val=avg(Val) default=double(null) on Timestamp from stime to etime step dt by Tsid
+| extend Val_f=series_fill_linear(Val)
+| extend lowess_9=dynamic(null)
+| invoke series_fit_lowess_fl('Val_f', 'lowess_9', 9, 'Timestamp')     //  strong lowess
+| extend vc=series_fill_const(Val, missing_val)
+| extend hybrid=array_iff(series_equals(vc, missing_val), lowess_9, Val)
+| project-away vc
+| render timechart with(ysplit=panels)
+
+
+//
+//  Demo of K-Means (from Scikit-learn)
+//
+
+//
+//  OccupancyDetection dataset from UCI Repository (https://archive.ics.uci.edu/ml/datasets/Occupancy+Detection+)
+//
+//  Experimental data used for binary classification (room occupancy) from Temperature,Humidity,Light and CO2.
+//  Ground-truth occupancy was obtained from time stamped pictures that were taken every minute
+//
+
+OccupancyDetection
+| take 20
+
+OccupancyDetection
+| count
+
+//
+//  K-Means clustering on the sensors measurements
+//
+//  Append cluster id per each record
+//
+let kmeans_fl=(tbl:(*), k:int, features:dynamic, cluster_col:string)
+{
+    let kwargs = pack('k', k, 'features', features, 'cluster_col', cluster_col);
+    let code =
+    ```if 1:
+        
+        from sklearn.cluster import KMeans
+        
+        k = kargs["k"]
+        features = kargs["features"]
+        cluster_col = kargs["cluster_col"]
+        
+        km = KMeans(n_clusters=k)
+        df1 = df[features]
+        km.fit(df1)
+        result = df
+        result[cluster_col] = km.labels_
+    ```;
+    tbl
+    | evaluate python(typeof(*), code, kwargs)
+};
+//
+let num_clusters=5;
+//
+OccupancyDetection
+| extend cluster_id=double(null)
+| invoke kmeans_fl(num_clusters, pack_array("Temperature", "Humidity", "Light", "CO2", "HumidityRatio"), "cluster_id")
+| sample 10
+
+//
+// same but output the centroids and size of the clusters:
+//
+let kmeans_fl=(tbl:(*), k:int, features:dynamic)
+{
+    let args = pack('k', k, 'features', features);
+    let code =
+    ```if 1:
+        
+        from sklearn.cluster import KMeans
+        
+        k = kargs["k"]
+        features = kargs["features"]
+        
+        km = KMeans(n_clusters=k)
+        df1 = df[features]
+        km.fit(df1)
+        result = pd.DataFrame(km.cluster_centers_, columns=df1.columns)
+        result.insert(df.shape[1], "num", pd.DataFrame(km.labels_, columns=["n"]).groupby("n").size())   
+        result.insert(df.shape[1], "cluster_id", range(k))
+    ```;
+    tbl
+    | evaluate python(typeof(*, cluster_id:int, num:long), code, args)
+};
+//
+let num_clusters=5;
+//
+OccupancyDetection
+| project-away Timestamp , Occupancy , Test 
+| invoke kmeans_fl(num_clusters, pack_array("Temperature", "Humidity", "Light", "CO2", "HumidityRatio"))
+
+//
+//  Demo of predicting (a.k.a. scoring) by classifier (from Scikit-learn)
+//
+//  Training the classifier in Jupyter (or other Python IDE), persist the resulting model in Kusto table & use it to classify new samples
+//
+//  Using the same OccupancyDetection dataset to predict room occupancy 
+//
+
+ML_Models
+| order by timestamp
+
+let classify_fl=(samples:(*), models_tbl:(name:string, timestamp:datetime, model:string), model_name:string, features_cols:dynamic, pred_col:string)
+{
+    let model_str = toscalar(models_tbl | where name == model_name | top 1 by timestamp desc | project model);
+    let kwargs = pack('smodel', model_str, 'features_cols', features_cols, 'pred_col', pred_col);
+    let code =
+    ```if 1:
+        
+        import pickle
+        import binascii
+        
+        smodel = kargs["smodel"]
+        features_cols = kargs["features_cols"]
+        pred_col = kargs["pred_col"]
+        bmodel = binascii.unhexlify(smodel)
+        clf1 = pickle.loads(bmodel)
+        df1 = df[features_cols]
+        predictions = clf1.predict(df1)
+        
+        result = df
+        result[pred_col] = pd.DataFrame(predictions, columns=[pred_col])
+    ```;
+    samples | evaluate python(typeof(*), code, kwargs)
+};
+OccupancyDetection 
+| where Test == 1
+| extend pred_Occupancy=bool(0)
+| invoke classify_fl(ML_Models, 'Occupancy', pack_array('Temperature', 'Humidity', 'Light', 'CO2', 'HumidityRatio'), 'pred_Occupancy')
+| fork
+(summarize n=count() by Occupancy, pred_Occupancy)                          //  confusion matrix
+(summarize accuracy = 100.0*count(Occupancy == pred_Occupancy)/count())     //  accuracy

@@ -1,0 +1,55 @@
+//
+//  SCAN operator examples
+//
+
+#connect cluster('demo11.westus.kusto.windows.net').database('ML')
+
+//
+//  Cumulative sum
+//
+
+range x from 1 to 10 step 1 
+| extend cumsum = row_cumsum(x)     //  using the native function
+
+range x from 1 to 10 step 1 
+| scan declare (cumsum:long=0) with 
+(
+    step s1: true => cumsum = x + s1.cumsum;    //  define the recursive calculation
+)
+
+//
+//  Fill forward string column
+//
+
+let States = datatable ( ts: timespan, state: string ) 
+[0m, "A", 1m, "", 2m, "B", 3m, "", 4m, "",6m, "C"]
+;
+States
+| sort by ts asc
+| scan declare (cont_state:string="") with 
+(
+    step s1: true => cont_state = iff(isempty(state), s1.cont_state, state);
+)
+
+//
+//  Funnel analysis
+//
+
+MyPageViews
+| where rand() < 0.0001
+
+MyPageViews
+| where PageName in ("Campaign landing", "Product details", "Add to cart", "Purchase")
+| partition hint.strategy = native by User
+(
+    order by Timestamp asc 
+    | scan with_match_id=m_id declare (StepId:long)
+    with 
+    (
+        step s1: PageName == "Campaign landing"                                     => StepId = 0;
+        step s2: PageName == "Product details"  and Timestamp - s1.Timestamp < 10m  => StepId = 1;
+        step s3: PageName == "Add to cart"      and Timestamp - s2.Timestamp < 15m  => StepId = 2;
+        step s4: PageName == "Purchase"         and Timestamp - s3.Timestamp < 15m  => StepId = 3;
+    )  
+)
+| summarize Event=any(PageName), dcount(User) by StepId
