@@ -1,3 +1,6 @@
+// Source of this Lab is https://github.com/ralphke/Azure-Data-Explorer-Labs
+//  https://aka.ms/KustoFree https://dataexplorer.azure.com/home
+
 // 🏃‍♂️ You can run a query by placing the cursor anywhere on the query text and clicking the run button (or Shift + Enter).
 // 📄 KQL overview https://docs.microsoft.com/en-us/azure/data-explorer/kusto/query/ 
 // 📃 Quick KQL reference guide can be found here https://docs.microsoft.com/en-us/azure/data-explorer/kql-quick-reference
