@@ -1,0 +1,16 @@
+//Compare by „Data scanned“
+
+TransformedSysLogs | summarize tr_count = count() by bin(timestamp, 1d)| where timestamp >= todatetime("2022-05-01");
+TransformedSysLogs | where timestamp >= todatetime("2022-05-01") | summarize tr_count = count() by bin(timestamp, 1d)
+
+//Versus
+
+TransformedSysLogs | summarize tr_count = count() by facility| where facility == "cron";
+TransformedSysLogs | where facility == "cron" | summarize tr_count = count() by facility
+
+//How can you explain the differnece?
+
+//Extra:
+// With ".show queryplan  <| TransformedSysLogs ..." you get you get more details.
+// Check the relational operator tree ("reloptree"). Are they different?
+//Tipp: kusto.explorer gives you with tools/Query Analyzer even a grafical representation

@@ -1,0 +1,10 @@
+//Let's start with a simple series:
+
+let min_t = toscalar(TransformedSysLogs | summarize min(timestamp));
+let max_t = toscalar(TransformedSysLogs | summarize max(timestamp));
+TransformedSysLogs
+| make-series avg(severity_code) on timestamp from min_t to max_t step 1d
+| render timechart 
+
+
+//@Ralph: More to come?

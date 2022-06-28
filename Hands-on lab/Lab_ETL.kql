@@ -1,0 +1,42 @@
+
+// in new DB in own cluster
+//Dupplicate table RawSysLogs
+.set  RawSysLogs <| cluster("help").database("SampleLogs").RawSysLogs | take 0
+//With .append: import records with date < 01.April 2022
+
+//With .set dupplicate table TransformedSysLogs
+
+
+// Create Transformation function RawSysLogs -> TransformedSysLogs
+.create-or-alter function  Transform_RawSysLogs() {
+RawSysLogs
+| extend
+	facility_code=toint(fields.facility_code),
+	message=tostring(fields.message),
+	procid= tolong(fields.procid),
+	severity_code=toint(fields.severity_code), 
+	SysLogTimestamp=unixtime_nanoseconds_todatetime(tolong(fields.timestamp)),
+	version= todouble(fields.version)
+| project-away fields, tags
+}
+
+//Test: get first 5 rows
+
+//Add columns for appname, facility, host and hostname
+//Test: get first 5 rows
+
+//Create Policy to update based on additions to RawSysLogs
+.alter table TransformedSysLogs policy update
+@'[{"IsEnabled": true, "Source": "RawSysLogs", "Query": "Transform_RawSysLogs()", "IsTransactional": true, "PropagateIngestionProperties": false}]'
+
+//Check: Creation of policy worked?
+.show table TransformedSysLogs policy update 
+
+// Test by getting more data from the help Cluster
+
+//Extra: Can we build a materilized view implementing the Transform Logic?
+
+//Extra: Create a materialized view counting events in TransformedSysLogs grouped by host
+// Place the view in a  folder "temp"
+//Extra: Create a materialized view counting events in TransformedSysLogs grouped by host and day
+//What does "backfill=true"?
